@@ -1,24 +1,59 @@
 // server.js
 const express = require('express');
-const YTDlpWrap = require('yt-dlp-wrap').default; // Importa a classe/construtor
+const YTDlpWrap = require('yt-dlp-wrap').default;
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs').promises;
-const { existsSync, mkdirSync } = require('fs'); // Para algumas operações síncronas
+const fsPromises = require('fs').promises; // Renomeado para fsPromises
+const { existsSync, mkdirSync, readdirSync } = require('fs'); // Adicionado readdirSync
 const { v4: uuidv4 } = require('uuid');
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 
+// --- DEBUG DO FILESYSTEM E PATH ---
+console.log("--- INÍCIO DEBUG DO AMBIENTE ---");
+console.log("Node.js version:", process.version);
+console.log("VERCEL:", process.env.VERCEL);
+console.log("Diretório de Trabalho Atual (cwd):", process.cwd());
+console.log("PATH:", process.env.PATH);
+
+const dirsInPath = (process.env.PATH || "").split(':');
+console.log("Verificando diretórios no PATH:");
+dirsInPath.forEach(dir => {
+    try {
+        if (existsSync(dir)) {
+            const files = readdirSync(dir);
+            const foundYtDlp = files.includes('yt-dlp');
+            // Log mais curto se a lista de arquivos for muito grande
+            let filesString = files.join(', ');
+            if (filesString.length > 300) {
+                filesString = filesString.substring(0, 300) + '... (lista truncada)';
+            }
+            console.log(`Conteúdo de ${dir}: ${filesString}${foundYtDlp ? ' (>>>> yt-dlp ENCONTRADO AQUI <<<<)' : ''}`);
+        } else {
+            console.log(`Diretório ${dir} (do PATH) não existe ou não é acessível.`);
+        }
+    } catch (e) {
+        console.log(`Erro ao ler diretório ${dir}: ${e.message.substring(0, 200)}`);
+    }
+});
+console.log("--- FIM DEBUG DO AMBIENTE ---");
+// --- FIM DEBUG DO FILESYSTEM E PATH ---
+
+
 // Configura o fluent-ffmpeg para usar o binário baixado pelo @ffmpeg-installer
 // Isso é para a conversão MP3 FEITA PELO fluent-ffmpeg.
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+if (ffmpegInstaller && ffmpegInstaller.path) {
+    ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+} else {
+    console.warn("Caminho do @ffmpeg-installer/ffmpeg não encontrado. Conversões MP3 podem falhar.");
+}
+
 
 const app = express();
 
 // Instancia YTDlpWrap SEM passar um caminho de binário.
-// Ele tentará encontrar 'yt-dlp' no PATH do sistema, que a Vercel deve configurar
-// após instalar yt-dlp via requirements.txt.
+// Ele tentará encontrar 'yt-dlp' no PATH do sistema.
 const ytDlpWrap = new YTDlpWrap();
 
 // Diretório temporário - ajustado para Vercel e local
@@ -26,14 +61,14 @@ const IS_VERCEL = process.env.VERCEL === '1';
 const TEMP_DOWNLOAD_DIR_BASE = IS_VERCEL ? '/tmp' : __dirname;
 const TEMP_DOWNLOAD_DIR = path.join(TEMP_DOWNLOAD_DIR_BASE, 'temp_downloads');
 
-console.log("Variáveis de Ambiente (início da função):");
-console.log("PATH:", process.env.PATH);
-console.log("LAMBDA_TASK_ROOT:", process.env.LAMBDA_TASK_ROOT); // /var/task
-console.log("LAMBDA_RUNTIME_DIR:", process.env.LAMBDA_RUNTIME_DIR); // /var/runtime
-
 if (!existsSync(TEMP_DOWNLOAD_DIR)) {
-    mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
-    console.log(`Diretório temporário criado/verificado em: ${TEMP_DOWNLOAD_DIR}`);
+    try {
+        mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
+        console.log(`Diretório temporário criado/verificado em: ${TEMP_DOWNLOAD_DIR}`);
+    } catch (e) {
+        console.error(`Falha ao criar diretório temporário ${TEMP_DOWNLOAD_DIR}:`, e);
+        // Considerar lançar o erro ou ter um fallback se o diretório é crítico.
+    }
 }
 
 app.use(cors());
@@ -58,14 +93,12 @@ app.post('/get-video-info', async (req, res) => {
         const requestTimestamp = new Date().toISOString();
         console.log(`[${requestTimestamp}] Pedido recebido: URL=${youtubeUrl}, Formato=${format}, Qualidade=${quality}`);
         console.log(`Usando TEMP_DOWNLOAD_DIR: ${TEMP_DOWNLOAD_DIR}`);
-        if (ffmpegInstaller.path) {
+        if (ffmpegInstaller && ffmpegInstaller.path) {
              console.log(`Caminho do FFmpeg (para fluent-ffmpeg): ${ffmpegInstaller.path}`);
-        } else {
-            console.warn("Caminho do FFmpeg (via @ffmpeg-installer) NÃO encontrado. Conversão MP3 pode falhar.");
         }
         console.log(`yt-dlp-wrap instanciado para usar yt-dlp do PATH.`);
 
-        const metadataJson = await ytDlpWrap.getVideoInfo(youtubeUrl); // Usa o ytDlpWrap configurado
+        const metadataJson = await ytDlpWrap.getVideoInfo(youtubeUrl); 
         const videoTitleBase = metadataJson.title ? metadataJson.title.replace(/[^\w\s.-]/gi, '_') : 'media';
 
         if (format === 'mp3') {
@@ -88,7 +121,7 @@ app.post('/get-video-info', async (req, res) => {
             outputPathForCurrentRequest = path.join(TEMP_DOWNLOAD_DIR, finalOutputMp3Name);
 
             console.log(`Baixando melhor áudio para (MP3): ${downloadedAudioFilePath} (Formato: ${inputAudioExtension}, ID: ${bestAudioFormatDetails.format_id})`);
-            await ytDlpWrap.execPromise([ // yt-dlp-wrap (usando yt-dlp do PATH) baixa o áudio original
+            await ytDlpWrap.execPromise([
                 youtubeUrl,
                 '-f', bestAudioFormatDetails.format_id || 'bestaudio/best',
                 '-o', downloadedAudioFilePath
@@ -97,7 +130,7 @@ app.post('/get-video-info', async (req, res) => {
 
             console.log(`Iniciando conversão de ${downloadedAudioFilePath} para ${outputPathForCurrentRequest} usando fluent-ffmpeg`);
             await new Promise((resolve, reject) => {
-                ffmpeg(downloadedAudioFilePath) // fluent-ffmpeg usa o FFmpeg de @ffmpeg-installer
+                ffmpeg(downloadedAudioFilePath) 
                     .audioCodec('libmp3lame')
                     .audioQuality(0) 
                     .toFormat('mp3')
@@ -146,8 +179,6 @@ app.post('/get-video-info', async (req, res) => {
             ];
 
             try {
-                // yt-dlp-wrap (usando yt-dlp do PATH) baixa e mescla o MP4.
-                // A mesclagem usará o FFmpeg que o yt-dlp encontrar (deve ser o de @ffmpeg-installer se yt-dlp não tiver um próprio ou se não achar outro no sistema)
                 await ytDlpWrap.execPromise(mp4DownloadArgs);
                 console.log(`MP4 salvo com sucesso em: ${outputPathForCurrentRequest}`);
 
@@ -169,14 +200,14 @@ app.post('/get-video-info', async (req, res) => {
         console.error(`[${requestTimestamp}] Erro detalhado no servidor:`, error);
         if (outputPathForCurrentRequest && existsSync(outputPathForCurrentRequest)) {
             try {
-                await fs.unlink(outputPathForCurrentRequest);
+                await fsPromises.unlink(outputPathForCurrentRequest); // Usar fsPromises
                 console.log(`Arquivo parcial ${outputPathForCurrentRequest} deletado após erro.`);
             } catch (e) { console.error(`Erro ao deletar arquivo parcial ${outputPathForCurrentRequest}:`, e); }
         }
         res.status(500).json({ error: 'Erro ao processar o vídeo.', details: error.message });
     } finally {
         if (downloadedAudioFilePath) { 
-            try { if (existsSync(downloadedAudioFilePath)) { await fs.unlink(downloadedAudioFilePath); console.log(`Arquivo de áudio intermediário ${downloadedAudioFilePath} deletado.`); }
+            try { if (existsSync(downloadedAudioFilePath)) { await fsPromises.unlink(downloadedAudioFilePath); console.log(`Arquivo de áudio intermediário ${downloadedAudioFilePath} deletado.`); } // Usar fsPromises
             } catch (cleanupError) { console.error(`Erro ao deletar ${downloadedAudioFilePath}:`, cleanupError); }
         }
     }
@@ -198,7 +229,7 @@ app.get('/downloads/:filename', async (req, res) => {
                     console.log(`[${requestTimestamp}] Arquivo ${filename} enviado com sucesso para o cliente.`);
                     setTimeout(async () => {
                         try {
-                            if (existsSync(filePath)) { await fs.unlink(filePath); console.log(`Arquivo ${filePath} deletado do servidor após download.`); }
+                            if (existsSync(filePath)) { await fsPromises.unlink(filePath); console.log(`Arquivo ${filePath} deletado do servidor após download.`); } // Usar fsPromises
                         } catch (e) { console.error(`Erro ao deletar arquivo ${filePath} após download:`, e); }
                     }, 5000); 
                 }
@@ -218,7 +249,7 @@ if (!IS_VERCEL) {
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
         console.log(`Servidor backend rodando em http://localhost:${port}`);
-        if (ffmpegInstaller.path) {
+        if (ffmpegInstaller && ffmpegInstaller.path) {
             console.log(`Usando fluent-ffmpeg com FFmpeg de @ffmpeg-installer: ${ffmpegInstaller.path}`);
         } else {
             console.warn("Caminho do FFmpeg (via @ffmpeg-installer) NÃO encontrado. Conversão MP3 PODE FALHAR.");
@@ -227,5 +258,5 @@ if (!IS_VERCEL) {
     });
 }
 
-// Exporte o app para a Vercel (ou para testes com supertest, etc.)
+// Exporte o app para a Vercel
 module.exports = app;
