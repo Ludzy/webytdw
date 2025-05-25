@@ -1,6 +1,6 @@
 // server.js
 const express = require('express');
-const YTDlpWrap = require('yt-dlp-wrap').default; // yt-dlp-wrap ainda é usado
+const YTDlpWrap = require('yt-dlp-wrap').default; // Importa a classe/construtor
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
@@ -16,27 +16,10 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
 
-// --- CONFIGURAÇÃO DO CAMINHO PARA O BINÁRIO yt-dlp EMPACOTADO ---
-const ytDlpBinaryPath = path.join(__dirname, 'bin', 'yt-dlp');
-
-// Verificação e log para o ambiente Vercel
-if (process.env.VERCEL === '1') {
-    console.log(`Verificando binário yt-dlp empacotado em: ${ytDlpBinaryPath}`);
-    if (existsSync(ytDlpBinaryPath)) {
-        console.log(`Binário yt-dlp encontrado em ${ytDlpBinaryPath}. Certifique-se de que ele tem permissões de execução via Git.`);
-        // Nota: chmodSync em /var/task (onde o código reside na Vercel) geralmente não funciona por ser read-only.
-        // A permissão deve ser definida ANTES do deploy, via Git.
-    } else {
-        // Este é um erro crítico se o binário não for encontrado.
-        console.error(`ERRO FATAL: Binário yt-dlp NÃO encontrado em ${ytDlpBinaryPath}. O download de informações e vídeos falhará.`);
-    }
-}
-
-// Instancia YTDlpWrap com o caminho para o binário local empacotado
-// Este ytDlpWrap será usado para obter metadados e para o download de MP4 (que usa yt-dlp diretamente)
-const ytDlpWrap = new YTDlpWrap(ytDlpBinaryPath);
-// --- FIM DA CONFIGURAÇÃO DO yt-dlp ---
-
+// Instancia YTDlpWrap SEM passar um caminho de binário.
+// Ele tentará encontrar 'yt-dlp' no PATH do sistema, que a Vercel deve configurar
+// após instalar yt-dlp via requirements.txt.
+const ytDlpWrap = new YTDlpWrap();
 
 // Diretório temporário - ajustado para Vercel e local
 const IS_VERCEL = process.env.VERCEL === '1';
@@ -70,9 +53,12 @@ app.post('/get-video-info', async (req, res) => {
         const requestTimestamp = new Date().toISOString();
         console.log(`[${requestTimestamp}] Pedido recebido: URL=${youtubeUrl}, Formato=${format}, Qualidade=${quality}`);
         console.log(`Usando TEMP_DOWNLOAD_DIR: ${TEMP_DOWNLOAD_DIR}`);
-        console.log(`Caminho do FFmpeg (para fluent-ffmpeg): ${ffmpegInstaller.path}`);
-        console.log(`Caminho do yt-dlp (para yt-dlp-wrap): ${ytDlpBinaryPath}`);
-
+        if (ffmpegInstaller.path) {
+             console.log(`Caminho do FFmpeg (para fluent-ffmpeg): ${ffmpegInstaller.path}`);
+        } else {
+            console.warn("Caminho do FFmpeg (via @ffmpeg-installer) NÃO encontrado. Conversão MP3 pode falhar.");
+        }
+        console.log(`yt-dlp-wrap instanciado para usar yt-dlp do PATH.`);
 
         const metadataJson = await ytDlpWrap.getVideoInfo(youtubeUrl); // Usa o ytDlpWrap configurado
         const videoTitleBase = metadataJson.title ? metadataJson.title.replace(/[^\w\s.-]/gi, '_') : 'media';
@@ -97,8 +83,7 @@ app.post('/get-video-info', async (req, res) => {
             outputPathForCurrentRequest = path.join(TEMP_DOWNLOAD_DIR, finalOutputMp3Name);
 
             console.log(`Baixando melhor áudio para (MP3): ${downloadedAudioFilePath} (Formato: ${inputAudioExtension}, ID: ${bestAudioFormatDetails.format_id})`);
-            // yt-dlp-wrap (com o binário empacotado) baixa o áudio original
-            await ytDlpWrap.execPromise([
+            await ytDlpWrap.execPromise([ // yt-dlp-wrap (usando yt-dlp do PATH) baixa o áudio original
                 youtubeUrl,
                 '-f', bestAudioFormatDetails.format_id || 'bestaudio/best',
                 '-o', downloadedAudioFilePath
@@ -156,7 +141,7 @@ app.post('/get-video-info', async (req, res) => {
             ];
 
             try {
-                // yt-dlp-wrap (com o binário empacotado) baixa e mescla o MP4.
+                // yt-dlp-wrap (usando yt-dlp do PATH) baixa e mescla o MP4.
                 // A mesclagem usará o FFmpeg que o yt-dlp encontrar (deve ser o de @ffmpeg-installer se yt-dlp não tiver um próprio ou se não achar outro no sistema)
                 await ytDlpWrap.execPromise(mp4DownloadArgs);
                 console.log(`MP4 salvo com sucesso em: ${outputPathForCurrentRequest}`);
@@ -177,7 +162,6 @@ app.post('/get-video-info', async (req, res) => {
     } catch (error) {
         const requestTimestamp = new Date().toISOString();
         console.error(`[${requestTimestamp}] Erro detalhado no servidor:`, error);
-        // Se outputPathForCurrentRequest foi definido e o arquivo existe devido a uma falha parcial, limpe-o.
         if (outputPathForCurrentRequest && existsSync(outputPathForCurrentRequest)) {
             try {
                 await fs.unlink(outputPathForCurrentRequest);
@@ -224,13 +208,19 @@ app.get('/downloads/:filename', async (req, res) => {
     }
 });
 
+// Se não estiver na Vercel, escute na porta definida
 if (!IS_VERCEL) {
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
         console.log(`Servidor backend rodando em http://localhost:${port}`);
-        console.log(`Usando fluent-ffmpeg com FFmpeg de @ffmpeg-installer: ${ffmpegInstaller.path}`);
-        console.log(`Usando yt-dlp-wrap com binário yt-dlp de: ${ytDlpBinaryPath}`);
+        if (ffmpegInstaller.path) {
+            console.log(`Usando fluent-ffmpeg com FFmpeg de @ffmpeg-installer: ${ffmpegInstaller.path}`);
+        } else {
+            console.warn("Caminho do FFmpeg (via @ffmpeg-installer) NÃO encontrado. Conversão MP3 PODE FALHAR.");
+        }
+        console.log(`yt-dlp-wrap instanciado para usar yt-dlp do PATH do sistema.`);
     });
 }
 
+// Exporte o app para a Vercel (ou para testes com supertest, etc.)
 module.exports = app;
