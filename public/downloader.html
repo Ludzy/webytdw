@@ -134,7 +134,7 @@
             downloadLinkContainer.classList.add('hidden');
     
             try {
-                const response = await fetch('http://localhost:3000/get-video-info', { // URL do seu backend
+                const response = await fetch('/get-video-info', { // URL relativa // URL do seu backend
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
