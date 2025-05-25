@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baixar Vídeos do YouTube</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        /* Estilos adicionais se necessário */
+        body {
+            font-family: 'Inter', sans-serif; /* Uma fonte bonita e moderna */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-white shadow-xl rounded-lg p-6 md:p-10 w-full max-w-2xl">
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-red-600">YouTube Downloader</h1>
+            <p class="text-gray-600 mt-2">Cole o link do vídeo do YouTube abaixo para baixar.</p>
+        </header>
+
+        <form id="downloadForm" class="space-y-6">
+            <div>
+                <label for="youtubeUrl" class="block text-sm font-medium text-gray-700 mb-1">Link do Vídeo do YouTube:</label>
+                <input type="url" id="youtubeUrl" name="youtubeUrl"
+                       class="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-red-500 focus:border-red-500 transition duration-150"
+                       placeholder="https://www.youtube.com/watch?v=..."
+                       required>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Selecione o Formato:</label>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <input type="radio" id="formatMp3" name="format" value="mp3" class="hidden peer">
+                        <label for="formatMp3"
+                               class="block w-full p-3 text-center bg-gray-50 border border-gray-300 rounded-md cursor-pointer peer-checked:bg-red-500 peer-checked:text-white peer-checked:border-red-500 hover:bg-gray-100 transition duration-150">
+                            MP3 (Áudio)
+                        </label>
+                    </div>
+                    <div>
+                        <input type="radio" id="formatMp4" name="format" value="mp4" class="hidden peer" checked>
+                        <label for="formatMp4"
+                               class="block w-full p-3 text-center bg-gray-50 border border-gray-300 rounded-md cursor-pointer peer-checked:bg-red-500 peer-checked:text-white peer-checked:border-red-500 hover:bg-gray-100 transition duration-150">
+                            MP4 (Vídeo)
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="qualityOptions" class="hidden"> <label for="videoQuality" class="block text-sm font-medium text-gray-700 mb-1">Qualidade do Vídeo (MP4):</label>
+                <select id="videoQuality" name="videoQuality"
+                        class="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-red-500 focus:border-red-500 transition duration-150">
+                    <option value="highest">Máxima Qualidade</option>
+                    <option value="1080p">1080p</option>
+                    <option value="720p">720p</option>
+                    <option value="480p">480p</option>
+                    <option value="360p">360p</option>
+                </select>
+            </div>
+
+            <div>
+                <button type="submit" id="downloadButton"
+                        class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 disabled:opacity-50">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2 animate-spin hidden" id="loadingSpinner" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m-15.357-2a8.001 8.001 0 0015.357 2M9 15h4.582" />
+                    </svg>
+                    Baixar
+                </button>
+            </div>
+        </form>
+
+        <div id="statusMessage" class="mt-6 text-center">
+            </div>
+
+        <div id="downloadLinkContainer" class="mt-6 text-center hidden">
+            <a id="downloadLink" href="#" target="_blank" rel="noopener noreferrer"
+               class="inline-block bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-md shadow-md transition duration-150 ease-in-out">
+                Clique aqui para baixar seu arquivo!
+            </a>
+        </div>
+
+        <footer class="mt-10 pt-6 border-t border-gray-200 text-center">
+            <p class="text-xs text-gray-500">
+                <strong>Aviso:</strong> Baixar vídeos do YouTube pode violar os Termos de Serviço da plataforma e
+                direitos autorais. Utilize esta ferramenta de forma responsável e legal, respeitando os
+                direitos dos criadores de conteúdo.
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        const downloadForm = document.getElementById('downloadForm');
+        const formatRadios = document.querySelectorAll('input[name="format"]');
+        const qualityOptionsDiv = document.getElementById('qualityOptions');
+        const downloadButton = document.getElementById('downloadButton');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const statusMessage = document.getElementById('statusMessage');
+        const downloadLinkContainer = document.getElementById('downloadLinkContainer');
+        const downloadLinkElement = document.getElementById('downloadLink'); // Renomeado para evitar conflito
+    
+        formatRadios.forEach(radio => {
+            radio.addEventListener('change', function() {
+                if (this.value === 'mp4') {
+                    qualityOptionsDiv.classList.remove('hidden');
+                } else {
+                    qualityOptionsDiv.classList.add('hidden');
+                }
+            });
+        });
+    
+        downloadForm.addEventListener('submit', async function(event) {
+            event.preventDefault();
+    
+            const youtubeUrl = document.getElementById('youtubeUrl').value;
+            const selectedFormat = document.querySelector('input[name="format"]:checked').value;
+            let videoQuality = null;
+            if (selectedFormat === 'mp4') {
+                 videoQuality = document.getElementById('videoQuality').value;
+            }
+    
+    
+            if (!youtubeUrl) {
+                statusMessage.textContent = 'Por favor, insira um link do YouTube.';
+                statusMessage.className = 'mt-6 text-center text-red-500 font-semibold';
+                return;
+            }
+    
+            downloadButton.disabled = true;
+            loadingSpinner.classList.remove('hidden');
+            statusMessage.textContent = 'Processando seu link...';
+            statusMessage.className = 'mt-6 text-center text-blue-600';
+            downloadLinkContainer.classList.add('hidden');
+    
+            try {
+                const response = await fetch('http://localhost:3000/get-video-info', { // URL do seu backend
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ youtubeUrl, format: selectedFormat, quality: videoQuality }),
+                });
+    
+                const data = await response.json();
+    
+                if (response.ok && data.success) {
+                    statusMessage.textContent = `Pronto para baixar: ${data.title || data.fileName}`;
+                    statusMessage.className = 'mt-6 text-center text-green-600 font-semibold';
+    
+                    downloadLinkElement.href = data.downloadUrl;
+                    downloadLinkElement.setAttribute('download', data.fileName); // Sugere o nome do arquivo
+                    downloadLinkElement.textContent = `Baixar ${data.fileName}`;
+                    downloadLinkContainer.classList.remove('hidden');
+    
+                    // Para alguns navegadores/links, clicar programaticamente pode funcionar:
+                    // downloadLinkElement.click();
+                    // Ou instruir o usuário a clicar.
+                } else {
+                    statusMessage.textContent = `Erro: ${data.error || 'Não foi possível processar o vídeo.'}`;
+                    statusMessage.className = 'mt-6 text-center text-red-500 font-semibold';
+                    if(data.details) console.error("Detalhes do erro:", data.details);
+                }
+    
+            } catch (error) {
+                console.error('Erro na comunicação com o backend:', error);
+                statusMessage.textContent = 'Erro de comunicação com o servidor. Verifique o console.';
+                statusMessage.className = 'mt-6 text-center text-red-500 font-semibold';
+            } finally {
+                downloadButton.disabled = false;
+                loadingSpinner.classList.add('hidden');
+            }
+        });
+    
+        // Garante que as opções de qualidade apareçam se MP4 estiver selecionado no carregamento
+        if (document.querySelector('input[name="format"]:checked').value === 'mp4') {
+            qualityOptionsDiv.classList.remove('hidden');
+        }
+    </script>
+
+</body>
+</html>
