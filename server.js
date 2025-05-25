@@ -3,58 +3,37 @@ const express = require('express');
 const YTDlpWrap = require('yt-dlp-wrap').default;
 const cors = require('cors');
 const path = require('path');
-const fsPromises = require('fs').promises; // Renomeado para fsPromises
-const { existsSync, mkdirSync, readdirSync } = require('fs'); // Adicionado readdirSync
+const fsPromises = require('fs').promises;
+const { existsSync, mkdirSync } = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 
-// --- DEBUG DO FILESYSTEM E PATH ---
-console.log("--- INÍCIO DEBUG DO AMBIENTE ---");
-console.log("Node.js version:", process.version);
-console.log("VERCEL:", process.env.VERCEL);
-console.log("Diretório de Trabalho Atual (cwd):", process.cwd());
-console.log("PATH:", process.env.PATH);
-
-const dirsInPath = (process.env.PATH || "").split(':');
-console.log("Verificando diretórios no PATH:");
-dirsInPath.forEach(dir => {
-    try {
-        if (existsSync(dir)) {
-            const files = readdirSync(dir);
-            const foundYtDlp = files.includes('yt-dlp');
-            // Log mais curto se a lista de arquivos for muito grande
-            let filesString = files.join(', ');
-            if (filesString.length > 300) {
-                filesString = filesString.substring(0, 300) + '... (lista truncada)';
-            }
-            console.log(`Conteúdo de ${dir}: ${filesString}${foundYtDlp ? ' (>>>> yt-dlp ENCONTRADO AQUI <<<<)' : ''}`);
-        } else {
-            console.log(`Diretório ${dir} (do PATH) não existe ou não é acessível.`);
-        }
-    } catch (e) {
-        console.log(`Erro ao ler diretório ${dir}: ${e.message.substring(0, 200)}`);
-    }
-});
-console.log("--- FIM DEBUG DO AMBIENTE ---");
-// --- FIM DEBUG DO FILESYSTEM E PATH ---
-
-
-// Configura o fluent-ffmpeg para usar o binário baixado pelo @ffmpeg-installer
-// Isso é para a conversão MP3 FEITA PELO fluent-ffmpeg.
 if (ffmpegInstaller && ffmpegInstaller.path) {
     ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 } else {
     console.warn("Caminho do @ffmpeg-installer/ffmpeg não encontrado. Conversões MP3 podem falhar.");
 }
 
-
 const app = express();
 
-// Instancia YTDlpWrap SEM passar um caminho de binário.
-// Ele tentará encontrar 'yt-dlp' no PATH do sistema.
-const ytDlpWrap = new YTDlpWrap();
+// --- CONFIGURAÇÃO DO CAMINHO PARA O BINÁRIO yt-dlp EMPACOTADO ---
+const ytDlpBinaryPath = path.join(__dirname, 'bin', 'yt-dlp');
+
+if (process.env.VERCEL === '1') {
+    console.log(`Verificando binário yt-dlp empacotado em: ${ytDlpBinaryPath}`);
+    if (existsSync(ytDlpBinaryPath)) {
+        console.log(`Binário yt-dlp encontrado em ${ytDlpBinaryPath}. Certifique-se de que ele tem permissões de execução via Git.`);
+    } else {
+        // Este é um erro crítico se o binário não for encontrado, impedirá a execução.
+        console.error(`ERRO FATAL: Binário yt-dlp NÃO encontrado em ${ytDlpBinaryPath}. Verifique se está na pasta 'bin' e deployado.`);
+    }
+}
+// Instancia YTDlpWrap com o caminho para o binário local empacotado
+const ytDlpWrap = new YTDlpWrap(ytDlpBinaryPath);
+// --- FIM DA CONFIGURAÇÃO DO yt-dlp ---
+
 
 // Diretório temporário - ajustado para Vercel e local
 const IS_VERCEL = process.env.VERCEL === '1';
@@ -67,7 +46,6 @@ if (!existsSync(TEMP_DOWNLOAD_DIR)) {
         console.log(`Diretório temporário criado/verificado em: ${TEMP_DOWNLOAD_DIR}`);
     } catch (e) {
         console.error(`Falha ao criar diretório temporário ${TEMP_DOWNLOAD_DIR}:`, e);
-        // Considerar lançar o erro ou ter um fallback se o diretório é crítico.
     }
 }
 
@@ -96,7 +74,7 @@ app.post('/get-video-info', async (req, res) => {
         if (ffmpegInstaller && ffmpegInstaller.path) {
              console.log(`Caminho do FFmpeg (para fluent-ffmpeg): ${ffmpegInstaller.path}`);
         }
-        console.log(`yt-dlp-wrap instanciado para usar yt-dlp do PATH.`);
+        console.log(`yt-dlp-wrap instanciado para usar binário de: ${ytDlpBinaryPath}`);
 
         const metadataJson = await ytDlpWrap.getVideoInfo(youtubeUrl); 
         const videoTitleBase = metadataJson.title ? metadataJson.title.replace(/[^\w\s.-]/gi, '_') : 'media';
@@ -200,14 +178,14 @@ app.post('/get-video-info', async (req, res) => {
         console.error(`[${requestTimestamp}] Erro detalhado no servidor:`, error);
         if (outputPathForCurrentRequest && existsSync(outputPathForCurrentRequest)) {
             try {
-                await fsPromises.unlink(outputPathForCurrentRequest); // Usar fsPromises
+                await fsPromises.unlink(outputPathForCurrentRequest);
                 console.log(`Arquivo parcial ${outputPathForCurrentRequest} deletado após erro.`);
             } catch (e) { console.error(`Erro ao deletar arquivo parcial ${outputPathForCurrentRequest}:`, e); }
         }
         res.status(500).json({ error: 'Erro ao processar o vídeo.', details: error.message });
     } finally {
         if (downloadedAudioFilePath) { 
-            try { if (existsSync(downloadedAudioFilePath)) { await fsPromises.unlink(downloadedAudioFilePath); console.log(`Arquivo de áudio intermediário ${downloadedAudioFilePath} deletado.`); } // Usar fsPromises
+            try { if (existsSync(downloadedAudioFilePath)) { await fsPromises.unlink(downloadedAudioFilePath); console.log(`Arquivo de áudio intermediário ${downloadedAudioFilePath} deletado.`); }
             } catch (cleanupError) { console.error(`Erro ao deletar ${downloadedAudioFilePath}:`, cleanupError); }
         }
     }
@@ -229,7 +207,7 @@ app.get('/downloads/:filename', async (req, res) => {
                     console.log(`[${requestTimestamp}] Arquivo ${filename} enviado com sucesso para o cliente.`);
                     setTimeout(async () => {
                         try {
-                            if (existsSync(filePath)) { await fsPromises.unlink(filePath); console.log(`Arquivo ${filePath} deletado do servidor após download.`); } // Usar fsPromises
+                            if (existsSync(filePath)) { await fsPromises.unlink(filePath); console.log(`Arquivo ${filePath} deletado do servidor após download.`); }
                         } catch (e) { console.error(`Erro ao deletar arquivo ${filePath} após download:`, e); }
                     }, 5000); 
                 }
@@ -254,7 +232,7 @@ if (!IS_VERCEL) {
         } else {
             console.warn("Caminho do FFmpeg (via @ffmpeg-installer) NÃO encontrado. Conversão MP3 PODE FALHAR.");
         }
-        console.log(`yt-dlp-wrap instanciado para usar yt-dlp do PATH do sistema.`);
+        console.log(`yt-dlp-wrap instanciado para usar binário yt-dlp de: ${ytDlpBinaryPath}`);
     });
 }
 
