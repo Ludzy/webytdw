@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "vercel-build": "echo 'Iniciando Vercel Build...' && mkdir -p ./bin && echo 'Baixando yt-dlp...' && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o ./bin/yt-dlp && echo 'Download completo. Definindo permissões...' && chmod +x ./bin/yt-dlp && echo 'yt-dlp pronto.'"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "vercel-build": "echo 'Ambiente Python e yt-dlp serão configurados pela Vercel via requirements.txt e runtime.txt'"
   },
   "keywords": [],
   "author": "",
