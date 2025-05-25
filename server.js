@@ -26,6 +26,11 @@ const IS_VERCEL = process.env.VERCEL === '1';
 const TEMP_DOWNLOAD_DIR_BASE = IS_VERCEL ? '/tmp' : __dirname;
 const TEMP_DOWNLOAD_DIR = path.join(TEMP_DOWNLOAD_DIR_BASE, 'temp_downloads');
 
+console.log("Variáveis de Ambiente (início da função):");
+console.log("PATH:", process.env.PATH);
+console.log("LAMBDA_TASK_ROOT:", process.env.LAMBDA_TASK_ROOT); // /var/task
+console.log("LAMBDA_RUNTIME_DIR:", process.env.LAMBDA_RUNTIME_DIR); // /var/runtime
+
 if (!existsSync(TEMP_DOWNLOAD_DIR)) {
     mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
     console.log(`Diretório temporário criado/verificado em: ${TEMP_DOWNLOAD_DIR}`);
