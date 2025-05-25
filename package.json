@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "vercel-build": "echo 'Ambiente Python e yt-dlp serão configurados pela Vercel via requirements.txt e runtime.txt'"
+    "vercel-build": "echo 'Usando yt-dlp empacotado. Ambiente Python ativado por runtime.txt para possíveis bibliotecas de sistema.'"
   },
   "keywords": [],
   "author": "",
