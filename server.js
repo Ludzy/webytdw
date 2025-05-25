@@ -1,20 +1,21 @@
 // server.js
 const express = require('express');
-const YTDlpWrap = require('yt-dlp-wrap').default;
+const YTDlpWrap = require('yt-dlp-wrap').default; // 1. Importa a classe/construtor
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
-const { existsSync, mkdirSync } = require('fs'); // Para algumas operações síncronas
+const { existsSync, mkdirSync } = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 
-// Configura o fluent-ffmpeg para usar o binário baixado pelo @ffmpeg-installer
+// Configura o fluent-ffmpeg
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
 
+const ytDlpWrap = new YTDlpWrap(); // 2. Cria a instância globalmente
 // Diretório temporário - ajustado para Vercel e local
 const IS_VERCEL = process.env.VERCEL === '1';
 const TEMP_DOWNLOAD_DIR_BASE = IS_VERCEL ? '/tmp' : __dirname; // No Vercel, usar /tmp
