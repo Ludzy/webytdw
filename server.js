@@ -4,10 +4,9 @@ const YTDlpWrap = require('yt-dlp-wrap').default;
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
-const { existsSync, mkdirSync } = require('fs');
+const { existsSync, mkdirSync } = require('fs'); // Para algumas operações síncronas
 const { v4: uuidv4 } = require('uuid');
 
-// Fluent FFmpeg - Estas são as importações corretas para esta abordagem
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 
@@ -15,21 +14,26 @@ const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const app = express();
-const port = 3000;
 
-const ytDlpWrap = new YTDlpWrap();
+// Diretório temporário - ajustado para Vercel e local
+const IS_VERCEL = process.env.VERCEL === '1';
+const TEMP_DOWNLOAD_DIR_BASE = IS_VERCEL ? '/tmp' : __dirname; // No Vercel, usar /tmp
+const TEMP_DOWNLOAD_DIR = path.join(TEMP_DOWNLOAD_DIR_BASE, 'temp_downloads');
 
-const TEMP_DOWNLOAD_DIR = path.join(__dirname, 'temp_downloads');
 if (!existsSync(TEMP_DOWNLOAD_DIR)) {
     mkdirSync(TEMP_DOWNLOAD_DIR, { recursive: true });
-    console.log(`Diretório temporário criado em: ${TEMP_DOWNLOAD_DIR}`);
+    console.log(`Diretório temporário criado/verificado em: ${TEMP_DOWNLOAD_DIR}`);
 }
 
 app.use(cors());
 app.use(express.json());
+
+// Servir arquivos estáticos da pasta 'public'
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Rota principal para servir o HTML
 app.get('/', (req, res) => {
+    // Certifique-se que downloader.html está na pasta 'public'
     res.sendFile(path.join(__dirname, 'public', 'downloader.html'));
 });
 
@@ -40,66 +44,65 @@ app.post('/get-video-info', async (req, res) => {
         return res.status(400).json({ error: 'URL do YouTube é obrigatória.' });
     }
 
-    let downloadedAudioFilePath = null; 
-    let finalOutputMp3Path = null;    
+    let downloadedAudioFilePath = null; // Usado especificamente para MP3 se houver um arquivo intermediário
+    let outputPathForCurrentRequest = null; // Caminho do arquivo final (MP3 ou MP4)
 
     try {
-        console.log(`Pedido recebido: URL=${youtubeUrl}, Formato=${format}, Qualidade=${quality}`);
+        const requestTimestamp = new Date().toISOString();
+        console.log(`[${requestTimestamp}] Pedido recebido: URL=${youtubeUrl}, Formato=${format}, Qualidade=${quality}`);
+        console.log(`Usando TEMP_DOWNLOAD_DIR: ${TEMP_DOWNLOAD_DIR}`);
+
         const metadataJson = await ytDlpWrap.getVideoInfo(youtubeUrl);
         const videoTitleBase = metadataJson.title ? metadataJson.title.replace(/[^\w\s.-]/gi, '_') : 'media';
 
         if (format === 'mp3') {
-            const uniqueIdInput = uuidv4();
+            const uniqueIdInput = uuidv4(); // Para o arquivo de áudio baixado por yt-dlp
+            const uniqueIdOutput = uuidv4(); // Para o arquivo MP3 final
+            
             const bestAudioFormatDetails = metadataJson.formats
                 .filter(f => f.vcodec === 'none' && f.acodec !== 'none')
                 .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
             if (!bestAudioFormatDetails) {
-                throw new Error('Nenhum formato de áudio adequado encontrado para download inicial.');
+                throw new Error('Nenhum formato de áudio adequado encontrado para download inicial (MP3).');
             }
             
             const inputAudioExtension = bestAudioFormatDetails.ext || 'm4a';
             const downloadedAudioFileName = `${videoTitleBase}_input_${uniqueIdInput}.${inputAudioExtension}`;
-            downloadedAudioFilePath = path.join(TEMP_DOWNLOAD_DIR, downloadedAudioFileName);
+            downloadedAudioFilePath = path.join(TEMP_DOWNLOAD_DIR, downloadedAudioFileName); // Arquivo intermediário
+            
+            const finalOutputMp3Name = `${videoTitleBase}_${uniqueIdOutput}.mp3`;
+            outputPathForCurrentRequest = path.join(TEMP_DOWNLOAD_DIR, finalOutputMp3Name); // Arquivo final
 
-            console.log(`Baixando melhor áudio para: ${downloadedAudioFilePath} (Formato: ${inputAudioExtension}, ID: ${bestAudioFormatDetails.format_id})`);
+            console.log(`Baixando melhor áudio para (MP3): ${downloadedAudioFilePath} (Formato: ${inputAudioExtension}, ID: ${bestAudioFormatDetails.format_id})`);
             await ytDlpWrap.execPromise([
                 youtubeUrl,
                 '-f', bestAudioFormatDetails.format_id || 'bestaudio/best',
                 '-o', downloadedAudioFilePath
             ]);
-            console.log('Áudio original baixado.');
+            console.log('Áudio original para MP3 baixado.');
 
-            const uniqueIdOutput = uuidv4();
-            const finalOutputMp3Name = `${videoTitleBase}_${uniqueIdOutput}.mp3`;
-            finalOutputMp3Path = path.join(TEMP_DOWNLOAD_DIR, finalOutputMp3Name);
-
-            console.log(`Iniciando conversão de ${downloadedAudioFilePath} para ${finalOutputMp3Path}`);
-
+            console.log(`Iniciando conversão de ${downloadedAudioFilePath} para ${outputPathForCurrentRequest}`);
             await new Promise((resolve, reject) => {
                 ffmpeg(downloadedAudioFilePath)
                     .audioCodec('libmp3lame')
-                    .audioQuality(0) // Equivalente a -q:a 0 (melhor VBR)
+                    .audioQuality(0) 
                     .toFormat('mp3')
                     .on('error', (err) => {
-                        console.error('Erro do FFmpeg:', err.message);
+                        console.error(`[${requestTimestamp}] Erro do FFmpeg (MP3):`, err.message);
                         reject(new Error(`Falha na conversão para MP3: ${err.message}`));
                     })
                     .on('progress', (progress) => {
-                        if (progress.percent) {
-                            console.log(`Progresso da conversão: ${progress.percent.toFixed(2)}%`);
-                        } else if (progress.timemark) {
-                            console.log(`Progresso da conversão (timemark): ${progress.timemark}`);
-                        }
+                        if (progress.percent) { console.log(`Progresso da conversão MP3: ${progress.percent.toFixed(2)}%`); }
                     })
                     .on('end', () => {
                         console.log('Conversão para MP3 finalizada com sucesso!');
                         resolve();
                     })
-                    .save(finalOutputMp3Path);
+                    .save(outputPathForCurrentRequest);
             });
             
-            console.log(`MP3 convertido salvo em: ${finalOutputMp3Path}`);
+            console.log(`MP3 convertido salvo em: ${outputPathForCurrentRequest}`);
             const serverDownloadUrl = `/downloads/${finalOutputMp3Name}`;
             return res.json({
                 success: true,
@@ -111,75 +114,128 @@ app.post('/get-video-info', async (req, res) => {
             });
 
         } else if (format === 'mp4') {
-            let formatSelector = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]';
+            const uniqueIdOutput = uuidv4();
+            const finalOutputMp4Name = `${videoTitleBase}_${uniqueIdOutput}.mp4`;
+            outputPathForCurrentRequest = path.join(TEMP_DOWNLOAD_DIR, finalOutputMp4Name); // Caminho do arquivo final MP4
+
+            let formatSelector = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]';
             if (quality && quality !== 'highest') {
                 const requestedHeight = parseInt(quality);
-                formatSelector = `bestvideo[height<=?${requestedHeight}][ext=mp4]+bestaudio[ext=m4a]/best[height<=?${requestedHeight}][ext=mp4]`;
+                if (!isNaN(requestedHeight)) {
+                    formatSelector = `bestvideo[height<=?${requestedHeight}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=?${requestedHeight}]+bestaudio/best[height<=?${requestedHeight}][ext=mp4]/best[ext=mp4]`;
+                } else {
+                    console.warn(`Qualidade MP4 inválida: ${quality}. Usando seleção padrão.`);
+                }
             }
-            const downloadArgs = [youtubeUrl, '-f', formatSelector, '-g'];
-            let directLinkResult = await ytDlpWrap.execPromise(downloadArgs);
-            let directLink = directLinkResult.split('\n')[0].trim();
             
-            if (!directLink || !directLink.startsWith('http')) {
-                const mp4Format = metadataJson.formats?.find(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.ext === 'mp4' && (quality === 'highest' || (f.height && f.height <= parseInt(quality))));
-                if (mp4Format) directLink = mp4Format.url;
-                else { const bestMp4Overall = metadataJson.formats?.filter(f => f.ext === 'mp4' && f.vcodec !== 'none').sort((a,b) => (b.height || 0) - (a.height || 0))[0]; if (bestMp4Overall) directLink = bestMp4Overall.url; }
+            console.log(`Iniciando download e merge para MP4: ${outputPathForCurrentRequest} com seletor: ${formatSelector}`);
+            const mp4DownloadArgs = [
+                youtubeUrl,
+                '-f', formatSelector,
+                '--merge-output-format', 'mp4',
+                '-o', outputPathForCurrentRequest
+            ];
+
+            try {
+                await ytDlpWrap.execPromise(mp4DownloadArgs);
+                console.log(`MP4 salvo com sucesso em: ${outputPathForCurrentRequest}`);
+
+                const serverDownloadUrl = `/downloads/${finalOutputMp4Name}`;
+                return res.json({
+                    success: true,
+                    message: 'MP4 com áudio pronto para download!',
+                    downloadUrl: serverDownloadUrl,
+                    fileName: finalOutputMp4Name,
+                    title: metadataJson.title,
+                    mimeType: 'video/mp4'
+                });
+            } catch (downloadError) {
+                console.error(`[${requestTimestamp}] Erro durante o download/merge para MP4:`, downloadError.stderr || downloadError.message || downloadError);
+                // O bloco finally geral cuidará da limpeza de outputPathForCurrentRequest se ele foi definido e o arquivo existe
+                throw new Error(`Falha ao processar para MP4: ${downloadError.message || 'Erro do yt-dlp'}`);
             }
-            if (!directLink || !directLink.startsWith('http')) { return res.status(500).json({ error: 'Não foi possível obter o link de download direto para MP4.' }); }
-            const outputFileName = `${videoTitleBase}.mp4`;
-            return res.json({ success: true, message: 'Link de download MP4 pronto!', downloadUrl: directLink, fileName: outputFileName, title: metadataJson.title, mimeType: 'video/mp4' });
         } else {
             return res.status(400).json({ error: 'Formato inválido.' });
         }
 
     } catch (error) {
-        console.error('Erro detalhado no servidor:', error);
+        const requestTimestamp = new Date().toISOString(); // Para ter o timestamp no log de erro
+        console.error(`[${requestTimestamp}] Erro detalhado no servidor:`, error);
         res.status(500).json({ error: 'Erro ao processar o vídeo.', details: error.message });
     } finally {
-        if (downloadedAudioFilePath) {
-            try { if (existsSync(downloadedAudioFilePath)) { await fs.unlink(downloadedAudioFilePath); console.log(`Arquivo de áudio temporário ${downloadedAudioFilePath} deletado.`); }
-            } catch (cleanupError) { console.error(`Erro ao deletar ${downloadedAudioFilePath}:`, cleanupError); }
+        // Limpa o arquivo de áudio INTERMEDIÁRIO usado especificamente pelo processo MP3
+        if (downloadedAudioFilePath) { 
+            try { 
+                if (existsSync(downloadedAudioFilePath)) { 
+                    await fs.unlink(downloadedAudioFilePath); 
+                    console.log(`Arquivo de áudio intermediário ${downloadedAudioFilePath} deletado.`); 
+                }
+            } catch (cleanupError) { 
+                console.error(`Erro ao deletar arquivo de áudio intermediário ${downloadedAudioFilePath}:`, cleanupError); 
+            }
         }
+        // A limpeza do arquivo FINAL (outputPathForCurrentRequest) é feita pela rota /downloads/:filename após o download.
+        // No entanto, se um erro ocorreu ANTES do arquivo ser enviado para /downloads, ele pode precisar de limpeza aqui.
+        // Mas, a lógica de 'catch' dentro de cada bloco de formato (MP3/MP4) já tenta limpar se o outputPath foi definido e o arquivo existe lá.
+        // Por isso, o outputPathForCurrentRequest não é explicitamente limpo aqui no 'finally' principal,
+        // para não interferir com a rota de download.
     }
 });
 
 app.get('/downloads/:filename', async (req, res) => {
     const { filename } = req.params;
     const filePath = path.join(TEMP_DOWNLOAD_DIR, filename);
+    const requestTimestamp = new Date().toISOString();
+
+    console.log(`[${requestTimestamp}] Tentando servir arquivo: ${filePath}`);
     try {
         if (existsSync(filePath)) {
-            res.download(filePath, filename, async (err) => {
-                if (err) { if (!res.headersSent) { res.status(500).send('Erro ao baixar.'); } } // Adicionado para evitar crash se headers já enviados
-                else { 
-                    // Tenta deletar o arquivo APÓS o download ter sido enviado (ou tentado)
-                    // Adicionamos uma pequena espera para garantir que o stream de download teve chance de iniciar
+            res.download(filePath, filename, async (err) => { // `filename` aqui é para o nome sugerido ao cliente
+                if (err) { 
+                    console.error(`[${requestTimestamp}] Erro ao enviar o arquivo ${filename} para download:`, err);
+                    if (!res.headersSent) { 
+                        res.status(500).send('Erro ao tentar baixar o arquivo.'); 
+                    } 
+                } else { 
+                    console.log(`[${requestTimestamp}] Arquivo ${filename} enviado com sucesso para o cliente.`);
+                    // Espera um pouco para o stream de download ter chance de finalizar antes de deletar
                     setTimeout(async () => {
                         try {
                             if (existsSync(filePath)) { 
                                 await fs.unlink(filePath); 
-                                console.log(`Arquivo ${filePath} deletado após download.`);
+                                console.log(`Arquivo ${filePath} deletado do servidor após download.`);
                             }
                         } catch (e) { 
-                            console.error("Erro ao deletar arquivo após download:", filePath, e);
+                            console.error(`Erro ao deletar arquivo ${filePath} após download:`, e);
                         }
-                    }, 1000); // Espera 1 segundo
+                    }, 5000); // Aumentado para 5 segundos para mais segurança
                 }
             });
-        } else { res.status(404).send('Arquivo não encontrado.'); }
+        } else { 
+            console.warn(`[${requestTimestamp}] Arquivo não encontrado para download: ${filePath}`);
+            res.status(404).send('Arquivo não encontrado ou já foi removido.'); 
+        }
     } catch (error) { 
-        console.error("Erro na rota /downloads:", error);
-        if (!res.headersSent) { res.status(500).send('Erro interno do servidor.'); } 
+        console.error(`[${requestTimestamp}] Erro na rota /downloads:`, error);
+        if (!res.headersSent) { 
+            res.status(500).send('Erro interno do servidor ao processar o download.'); 
+        } 
     }
 });
 
-app.listen(port, () => {
-    console.log(`Servidor backend rodando em http://localhost:${port}`);
-    console.log(`Usando fluent-ffmpeg com @ffmpeg-installer/ffmpeg para conversões MP3.`);
-    if (ffmpegInstaller.path) {
-        console.log(`Caminho do FFmpeg (via @ffmpeg-installer): ${ffmpegInstaller.path}`);
-    } else {
-        console.warn("Não foi possível determinar o caminho do FFmpeg via @ffmpeg-installer/ffmpeg. A conversão PODE FALHAR.");
-        console.warn("Certifique-se de que o pacote '@ffmpeg-installer/ffmpeg' foi instalado corretamente e que não houve erros durante 'npm install'.");
-        console.warn("Em alguns sistemas, pode ser necessário instalar o FFmpeg manualmente e adicioná-lo ao PATH do sistema se o @ffmpeg-installer falhar.");
-    }
-});
+// Se não estiver na Vercel, escute na porta definida
+if (!IS_VERCEL) {
+    const port = process.env.PORT || 3000;
+    app.listen(port, () => {
+        console.log(`Servidor backend rodando em http://localhost:${port}`);
+        console.log(`Usando fluent-ffmpeg com @ffmpeg-installer/ffmpeg para conversões.`);
+        if (ffmpegInstaller.path) {
+            console.log(`Caminho do FFmpeg (via @ffmpeg-installer): ${ffmpegInstaller.path}`);
+        } else {
+            console.warn("Não foi possível determinar o caminho do FFmpeg via @ffmpeg-installer/ffmpeg. A conversão PODE FALHAR.");
+        }
+    });
+}
+
+// Exporte o app para a Vercel (ou para testes com supertest, etc.)
+module.exports = app;
